@@ -1,28 +1,26 @@
 from fastapi import FastAPI, Request
 from telegram import Update
-from telegram.ext import ApplicationBuilder, CommandHandler, ContextTypes
+from telegram.ext import Application, CommandHandler, ContextTypes
 import os
 
-BOT_TOKEN = os.getenv("BOT_TOKEN") or "<ТВОЙ_ТОКЕН>"
-WEBHOOK_PATH = f"/webhook/{BOT_TOKEN}"
-WEBHOOK_URL = f"https://asktfeedbackbot-production.up.railway.app{WEBHOOK_PATH}"
+# Переменная должна строго совпадать с тем, что ты указал в Railway
+TOKEN = os.getenv("BOT_TOKEN")
 
 app = FastAPI()
-application = ApplicationBuilder().token(BOT_TOKEN).build()
+application = Application.builder().token(TOKEN).build()
 
-# Команда /start
+# Пример команды
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("Бот ASKT работает через Webhook.")
+    await update.message.reply_text("Бот работает. Всё стабильно.")
 
 application.add_handler(CommandHandler("start", start))
 
-@app.on_event("startup")
-async def on_startup():
-    await application.bot.set_webhook(url=WEBHOOK_URL)
-
-@app.post(WEBHOOK_PATH)
+@app.post("/")
 async def handle_webhook(request: Request):
     data = await request.json()
     update = Update.de_json(data, application.bot)
+    await application.initialize()        # ← инициализация
+    await application.start()             # ← запуск обработчика
     await application.process_update(update)
-    return {"status": "ok"}
+    await application.stop()              # ← корректная остановка
+    return {"ok": True}
