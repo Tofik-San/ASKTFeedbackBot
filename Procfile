@@ -1,1 +1,2 @@
-web: uvicorn ASKTFeedbackBot :app --host=0.0.0.0 --port=${PORT}
+web: python ASKTFeedbackBot.py
+
