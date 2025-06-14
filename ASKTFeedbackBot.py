@@ -1,30 +1,31 @@
+import logging
 import os
+from telegram import Update
+from telegram.ext import ApplicationBuilder, ContextTypes, MessageHandler, filters
 from dotenv import load_dotenv
-from fastapi import FastAPI, Request
-from fastapi.responses import JSONResponse
-from telebot import TeleBot, types
 
 load_dotenv()
 TOKEN = os.getenv("TELEGRAM_TOKEN")
-bot = TeleBot(TOKEN)
-app = FastAPI()
 
-BAD_WORDS = {"хуй", "пизда", "ебать", "нахуй", "гандон"}
-SPAM_PATTERNS = ["http", "t.me", "@"]
+logging.basicConfig(level=logging.INFO)
 
-@app.post("/")
-async def webhook(req: Request):
-    try:
-        data = await req.json()
-        msg = types.Update.de_json(data).message
-        if msg:
-            uid = msg.from_user.id
-            cid = msg.chat.id
-            txt = msg.text.lower() if msg.text else ""
+# Ключевые слова для блокировки
+BANNED_KEYWORDS = ["http", "https", "t.me", "бот", "порно", "viagra", "casino"]
 
-            if any(w in txt for w in BAD_WORDS | set(SPAM_PATTERNS)):
-                bot.ban_chat_member(cid, uid)
-                bot.send_message(cid, f"🚫 {msg.from_user.first_name} забанен.")
-    except Exception as e:
-        print("💥", e)
-    return JSONResponse(content={"ok": True})
+async def moderate(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    message_text = update.message.text.lower()
+    user_id = update.effective_user.id
+    chat_id = update.effective_chat.id
+
+    if any(keyword in message_text for keyword in BANNED_KEYWORDS):
+        try:
+            await context.bot.ban_chat_member(chat_id=chat_id, user_id=user_id)
+            await update.message.reply_text("⛔ Нарушение. Пользователь забанен.")
+        except Exception as e:
+            logging.error(f"Ошибка при бане: {e}")
+        return
+
+if __name__ == "__main__":
+    app = ApplicationBuilder().token(TOKEN).build()
+    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, moderate))
+    app.run_polling()
