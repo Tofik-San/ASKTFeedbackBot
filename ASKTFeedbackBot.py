@@ -6,7 +6,7 @@ from telegram.ext import (
     filters, CallbackQueryHandler, ContextTypes, ChatMemberHandler
 )
 
-TOKEN = os.getenv("TELEGRAM_TOKEN")
+TOKEN = os.getenv("BOT_TOKEN")
 GROUP_CHAT_ID = -1002794841645
 
 app = FastAPI()
