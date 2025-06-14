@@ -1,70 +1,74 @@
 import os
 from fastapi import FastAPI, Request
-from telegram import (
-    Bot, Update, InlineKeyboardButton, InlineKeyboardMarkup, ChatPermissions
-)
+from telegram import Update, InlineKeyboardMarkup, InlineKeyboardButton
 from telegram.ext import (
-    Application, ContextTypes, CommandHandler, MessageHandler,
-    filters, CallbackQueryHandler
+    Application, CommandHandler, MessageHandler,
+    filters, CallbackQueryHandler, ContextTypes, ChatMemberHandler
 )
 
-TOKEN = os.getenv("BOT_TOKEN")
-CHANNEL_ID = "@ASKT_Feedback"
+TOKEN = os.getenv("TELEGRAM_TOKEN")
+GROUP_CHAT_ID = -1002794841645
 
 app = FastAPI()
-bot_app = Application.builder().token(TOKEN).build()
+application = Application.builder().token(TOKEN).build()
 
+# Приветствие при входе
+async def greet_user(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    member = update.chat_member
+    if member.new_chat_member.status == "member":
+        keyboard = InlineKeyboardMarkup([
+            [InlineKeyboardButton("👍 Понравилось", callback_data="like")],
+            [InlineKeyboardButton("👎 Не понравилось", callback_data="dislike")]
+        ])
+        await context.bot.send_message(
+            chat_id=GROUP_CHAT_ID,
+            text=f"Привет, {member.from_user.first_name}!\nОставь отзыв о боте:",
+            reply_markup=keyboard
+        )
 
-# 👉 Стартовое приветствие
-async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    keyboard = [
-        [InlineKeyboardButton("👍 Понравилось", callback_data="like")],
-        [InlineKeyboardButton("👎 Не понравилось", callback_data="dislike")]
-    ]
-    reply_markup = InlineKeyboardMarkup(keyboard)
-    await update.message.reply_text("Привет! Оставь отзыв о канале:", reply_markup=reply_markup)
-
-
-# 👉 Обработка нажатия кнопки
-async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+# Обработка нажатий на кнопки
+async def handle_feedback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
 
     if query.data == "like":
-        await query.edit_message_text("Отлично! Напиши, что именно понравилось.")
+        await query.message.reply_text("Спасибо! А теперь напиши, что именно понравилось.")
     elif query.data == "dislike":
-        await query.edit_message_text("Спасибо! Напиши, что было не так.")
+        await query.message.reply_text("Жаль. Расскажи, что не устроило.")
 
+# Модерация: удаление спама / мата / ссылок
+BAD_WORDS = ["хуй", "пизд", "еба", "нахуй", "сука", "порно", "http", "t.me", "https"]
 
-# 👉 Проверка сообщений на флуд/запрещёнку
-async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def moderate_messages(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = update.message.text.lower()
     user_id = update.message.from_user.id
 
-    bad_words = ["хуй", "пизда", "еблан", "сука"]
-    if any(word in text for word in bad_words) or len(text) > 300:
-        await context.bot.ban_chat_member(chat_id=update.message.chat_id, user_id=user_id)
-        await context.bot.send_message(chat_id=update.message.chat_id,
-                                       text="Пользователь заблокирован за нарушение.")
-        return
+    if any(bad in text for bad in BAD_WORDS):
+        await update.message.delete()
+        await context.bot.send_message(
+            chat_id=GROUP_CHAT_ID,
+            text=f"Сообщение удалено. Пользователь нарушил правила."
+        )
+        try:
+            await context.bot.ban_chat_member(GROUP_CHAT_ID, user_id)
+        except:
+            pass  # бот должен иметь права администратора
 
-    await context.bot.send_message(chat_id=CHANNEL_ID,
-                                   text=f"✍ Отзыв от @{update.message.from_user.username or 'пользователя'}:\n\n{text}")
+# Старт-команда
+async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.message.reply_text("Бот запущен и работает в группе для отзывов.")
 
-
-# 👉 Webhook-обработка
+# Роут вебхука
 @app.post("/")
-async def webhook(request: Request):
+async def handle_webhook(request: Request):
     data = await request.json()
-    print(data)  # временно для логов Railway
-
-    update = Update.de_json(data, bot_app.bot)
-    await bot_app.initialize()
-    await bot_app.process_update(update)
+    update = Update.de_json(data, application.bot)
+    await application.initialize()
+    await application.process_update(update)
     return {"ok": True}
 
-
-# 👉 Роутинг
-bot_app.add_handler(CommandHandler("start", start))
-bot_app.add_handler(CallbackQueryHandler(button_handler))
-bot_app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, message_handler))
+# Регистрация хендлеров
+application.add_handler(ChatMemberHandler(greet_user, ChatMemberHandler.CHAT_MEMBER))
+application.add_handler(CallbackQueryHandler(handle_feedback))
+application.add_handler(MessageHandler(filters.TEXT & filters.Chat(GROUP_CHAT_ID), moderate_messages))
+application.add_handler(CommandHandler("start", start))
