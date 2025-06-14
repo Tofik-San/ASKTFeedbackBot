@@ -1,31 +1,28 @@
-import logging
-import os
+from fastapi import FastAPI, Request
 from telegram import Update
-from telegram.ext import ApplicationBuilder, ContextTypes, MessageHandler, filters
-from dotenv import load_dotenv
+from telegram.ext import ApplicationBuilder, CommandHandler, ContextTypes
+import os
 
-load_dotenv()
-TOKEN = os.getenv("TELEGRAM_TOKEN")
+BOT_TOKEN = os.getenv("BOT_TOKEN") or "<ТВОЙ_ТОКЕН>"
+WEBHOOK_PATH = f"/webhook/{BOT_TOKEN}"
+WEBHOOK_URL = f"https://asktfeedbackbot-production.up.railway.app{WEBHOOK_PATH}"
 
-logging.basicConfig(level=logging.INFO)
+app = FastAPI()
+application = ApplicationBuilder().token(BOT_TOKEN).build()
 
-# Ключевые слова для блокировки
-BANNED_KEYWORDS = ["http", "https", "t.me", "бот", "порно", "viagra", "casino"]
+# Команда /start
+async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.message.reply_text("Бот ASKT работает через Webhook.")
 
-async def moderate(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    message_text = update.message.text.lower()
-    user_id = update.effective_user.id
-    chat_id = update.effective_chat.id
+application.add_handler(CommandHandler("start", start))
 
-    if any(keyword in message_text for keyword in BANNED_KEYWORDS):
-        try:
-            await context.bot.ban_chat_member(chat_id=chat_id, user_id=user_id)
-            await update.message.reply_text("⛔ Нарушение. Пользователь забанен.")
-        except Exception as e:
-            logging.error(f"Ошибка при бане: {e}")
-        return
+@app.on_event("startup")
+async def on_startup():
+    await application.bot.set_webhook(url=WEBHOOK_URL)
 
-if __name__ == "__main__":
-    app = ApplicationBuilder().token(TOKEN).build()
-    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, moderate))
-    app.run_polling()
+@app.post(WEBHOOK_PATH)
+async def handle_webhook(request: Request):
+    data = await request.json()
+    update = Update.de_json(data, application.bot)
+    await application.process_update(update)
+    return {"status": "ok"}
