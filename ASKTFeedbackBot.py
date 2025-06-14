@@ -56,6 +56,8 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 @app.post("/")
 async def webhook(request: Request):
     data = await request.json()
+    print(data)  # временно для логов Railway
+
     update = Update.de_json(data, bot_app.bot)
     await bot_app.initialize()
     await bot_app.process_update(update)
