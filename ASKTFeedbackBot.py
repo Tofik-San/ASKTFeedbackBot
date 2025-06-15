@@ -1,52 +1,48 @@
 import os
-import openai
 from fastapi import FastAPI, Request
 from telegram import Update
-from telegram.ext import (
-    Application, MessageHandler, ContextTypes, filters
-)
+from telegram.ext import Application, ContextTypes, MessageHandler, filters
+from openai import OpenAI
 
-# Получаем ключи
+# Переменные окружения
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 
-# Устанавливаем ключ OpenAI
-openai.api_key = OPENAI_API_KEY
-
-# Инициализация FastAPI и Telegram App
+# Telegram-приложение
 app = FastAPI()
-application = Application.builder().token(BOT_TOKEN).build()
+telegram_app = Application.builder().token(BOT_TOKEN).build()
+client = OpenAI(api_key=OPENAI_API_KEY)
 
-# Обработка входящих сообщений
+# GPT-обработка текста
+async def process_text_with_gpt(user_text: str) -> str:
+    try:
+        response = client.chat.completions.create(
+            model="gpt-3.5-turbo",
+            messages=[
+                {"role": "system", "content": "Ты Telegram-бот. Отвечай на отзывы людей: коротко, уважительно, и по делу."},
+                {"role": "user", "content": user_text}
+            ]
+        )
+        return response.choices[0].message.content.strip()
+    except Exception as e:
+        print("GPT Error:", e)
+        return "Ошибка при обработке. Попробуй снова позже."
+
+# Обработчик сообщений
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.message and update.message.text:
-        user_message = update.message.text
+        user_text = update.message.text
+        response = await process_text_with_gpt(user_text)
+        await update.message.reply_text(response)
 
-        try:
-            gpt_response = openai.ChatCompletion.create(
-                model="gpt-3.5-turbo",
-                messages=[
-                    {"role": "system", "content": "Ты дружелюбный и краткий бот для сбора отзывов. Отвечай по делу, с лёгким юмором, без воды."},
-                    {"role": "user", "content": user_message}
-                ],
-                max_tokens=100,
-                temperature=0.7
-            )
-            reply = gpt_response.choices[0].message.content.strip()
-            await update.message.reply_text(reply)
+# Роутинг Telegram
+telegram_app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
 
-        except Exception as e:
-            print(f"OpenAI error: {e}")
-            await update.message.reply_text("Ошибка при обработке. Попробуй снова позже.")
-
-# Добавляем обработчик всех текстов
-application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
-
-# Webhook endpoint
+# FastAPI — вебхук
 @app.post("/")
-async def telegram_webhook(req: Request):
-    data = await req.json()
-    update = Update.de_json(data, application.bot)
-    await application.initialize()
-    await application.process_update(update)
+async def webhook(request: Request):
+    data = await request.json()
+    update = Update.de_json(data, telegram_app.bot)
+    await telegram_app.initialize()
+    await telegram_app.process_update(update)
     return {"ok": True}
