@@ -1,71 +1,90 @@
-from aiogram import Bot, Dispatcher, types
-from aiogram.types import ReplyKeyboardMarkup, KeyboardButton
-from aiogram.utils import executor
+import os
+from fastapi import FastAPI, Request
+from telegram import Update, ReplyKeyboardMarkup, KeyboardButton
+from telegram.ext import Application, ContextTypes, MessageHandler, filters
+from openai import OpenAI
 
-API_TOKEN = 'YOUR_TELEGRAM_BOT_TOKEN'
-MAIN_BOT_LINK = 'https://t.me/ASKTbot'  # ссылка на основного бота
+BOT_TOKEN = os.getenv("BOT_TOKEN")
+OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 
-bot = Bot(token=API_TOKEN)
-dp = Dispatcher(bot)
+app = FastAPI()
+telegram_app = Application.builder().token(BOT_TOKEN).build()
+client = OpenAI(api_key=OPENAI_API_KEY)
 
-# Память для выбранного направления и флага завершённого диалога
+# Хранилище состояний пользователей
 user_mode = {}
 completed_users = set()
 
-# Кнопки для выбора направления
-mode_keyboard = ReplyKeyboardMarkup(resize_keyboard=True)
-mode_keyboard.add(
-    KeyboardButton("Бизнес"),
-    KeyboardButton("Учёба"),
-    KeyboardButton("Маркетинг"),
-    KeyboardButton("Работа")
+# Кнопки выбора направления
+mode_keyboard = ReplyKeyboardMarkup(
+    keyboard=[[KeyboardButton("Бизнес")], [KeyboardButton("Учёба")],
+              [KeyboardButton("Маркетинг")], [KeyboardButton("Работа")]],
+    resize_keyboard=True, one_time_keyboard=True
 )
 
-@dp.message_handler(commands=['start'])
-async def start_cmd(message: types.Message):
-    user_id = message.from_user.id
-    if user_id in completed_users:
-        await message.answer("Спасибо, отзыв уже получен. Если хотите вернуться — вот бот: " + MAIN_BOT_LINK)
-    else:
-        await message.answer("Выберите направление, с которым вы работали:", reply_markup=mode_keyboard)
+# Системный промт
+system_prompt_base = """Ты — админ-бот, который принимает и обрабатывает отзывы пользователей после работы с одним из четырёх GPT-ботов: «Бизнес», «Учёба», «Маркетинг», «Работа».
 
-@dp.message_handler(lambda message: message.text in ["Бизнес", "Учёба", "Маркетинг", "Работа"])
-async def select_mode(message: types.Message):
-    user_id = message.from_user.id
+🎯 Твоя задача:
+— Принять отзыв.
+— Классифицировать его по эмоциональному тону и содержанию.
+— Выдать одну короткую реакцию, соответствующую стилю отзыва.
+
+📌 Единственный вопрос, который ты имеешь право задать:
+Если не указан бот, с которым работал пользователь (`mode`), сначала спроси:
+"С каким ботом работал(а): бизнес, учёба, маркетинг или работа?"  
+Дождись ответа. Затем — среагируй. Больше ничего не спрашиваешь.
+
+🧷 Итог:
+Каждый ответ — как реакция живого, нормального человека. Метко. Коротко. Без церемоний. Только реакция. Без продолжений.
+"""
+
+# GPT обработка текста
+async def process_text_with_gpt(user_text: str, mode: str) -> str:
+    response = client.chat.completions.create(
+        model="gpt-3.5-turbo",
+        messages=[
+            {"role": "system", "content": system_prompt_base},
+            {"role": "user", "content": f"Mode: {mode}\nОтзыв: {user_text}"}
+        ]
+    )
+    return response.choices[0].message.content.strip()
+
+# Обработка выбора направления
+@telegram_app.message_handler(filters.TEXT & filters.Regex("^(Бизнес|Учёба|Маркетинг|Работа)$"))
+async def handle_mode(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.effective_user.id
     if user_id in completed_users:
         return
-    user_mode[user_id] = message.text
-    await message.answer("Ок. Теперь пришлите отзыв.", reply_markup=types.ReplyKeyboardRemove())
+    user_mode[user_id] = update.message.text
+    await update.message.reply_text("Теперь напишите ваш отзыв.", reply_markup=None)
 
-@dp.message_handler()
-async def handle_feedback(message: types.Message):
-    user_id = message.from_user.id
+# Обработка отзыва
+@telegram_app.message_handler(filters.TEXT)
+async def handle_feedback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.effective_user.id
+    user_text = update.message.text.strip()
+
     if user_id in completed_users:
-        await message.answer("Отзыв уже принят. Вернуться можно по ссылке: " + MAIN_BOT_LINK)
+        return
+
+    if user_id not in user_mode:
+        await update.message.reply_text(
+            "С каким ботом работал(а): бизнес, учёба, маркетинг или работа?",
+            reply_markup=mode_keyboard
+        )
         return
 
     mode = user_mode.get(user_id)
-    if not mode:
-        await message.answer("Сначала выберите направление: /start")
-        return
-
-    feedback = message.text.strip().lower()
-
-    if any(x in feedback for x in ["спасибо", "топ", "огонь", "кайф"]):
-        response = "Рад, что зашло."
-    elif any(x in feedback for x in ["такое", "сойдёт", "на троечку"]):
-        response = "Ну хоть не проклял — уже прогресс :)"
-    elif any(x in feedback for x in ["говно", "не работает", "удаляю"]):
-        response = "Бывает. Сегодня не его день."
-    elif any(x in feedback for x in ["добавить", "предлагаю", "не хватает"]):
-        response = "Ловлю идею. Подумаем."
-    else:
-        response = "Принято. Спасибо за отзыв."
-
-    await message.answer(f"{response} ({mode})\n\nЕсли хотите снова — возвращайтесь: {MAIN_BOT_LINK}")
+    gpt_reply = await process_text_with_gpt(user_text, mode)
+    await update.message.reply_text(gpt_reply)
 
     completed_users.add(user_id)
     user_mode.pop(user_id, None)
 
-if name == '__main__':
-    executor.start_polling(dp, skip_updates=True)
+# Webhook обработка
+@app.post("/")
+async def webhook(request: Request):
+    data = await request.json()
+    await telegram_app.update_queue.put(Update.de_json(data, telegram_app.bot))
+    return {"ok": True}
